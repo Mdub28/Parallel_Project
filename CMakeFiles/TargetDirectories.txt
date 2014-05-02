@@ -1,0 +1,1 @@
+/afs/andrew.cmu.edu/usr4/weiguang/private/15418/project/CMakeFiles/ColorPlate.dir

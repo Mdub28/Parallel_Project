@@ -1,0 +1,1 @@
+/usr/local/bin/c++      CMakeFiles/ColorPlate.dir/main.cpp.o  -o ColorPlate -rdynamic 

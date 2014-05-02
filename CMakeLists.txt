@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 2.8)
+project( ColorPlate )
+set(OpenCV_DIR "afs/cs/academic/class/15418-s13/public/share/OpenCV")
+INCLUDE_DIRECTORIES("/afs/cs.cmu.edu/academic/class/15418-s13/public/include")
+add_executable( ColorPlate main.cpp )
+target_link_libraries( ColorPlate ${OpenCV_LIBS})
