@@ -10,7 +10,8 @@
 #include "CycleTimer.h"
 using namespace cv; 
 using namespace std;
-Mat colorPlateCuda(Mat image);
+
+Mat runCuda(Mat image);
 
 void findOffset(Mat blue, Mat green, Mat red, int * offsets) {
 	if (blue.rows < 500 && blue.cols < 500) {
@@ -108,7 +109,6 @@ Mat shiftImage(int lr, int ud, Mat image) {
 } 
 
 Mat runSequential(Mat image) {
-	printf("original size: %d, %d \n", image.cols, image.rows); 
 	double startTime = CycleTimer::currentSeconds();
 	int wbor = image.cols / 20;
 	int hbor = image.rows / 20;
@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
 	if (type=="s") {
 		final = runSequential(image);
 	} else if (type =="p") {
-		return -1;
+		final = runCUDA(image);
 	} else {
 		return -1;
 	}
