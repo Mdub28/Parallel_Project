@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
 	if (type=="s") {
 		final = runSequential(image);
 	} else if (type =="p") {
-		final = runCUDA(image);
+		return -1;
 	} else {
 		return -1;
 	}

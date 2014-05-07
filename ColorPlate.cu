@@ -56,3 +56,37 @@ Mat runCUDA(Mat image) {
 	*/
 	return image;
 }
+
+int main(int argc, char** argv) {
+	string input; 
+	string output;
+	string type;
+
+	if (argc > 3) {
+	  type = string(argv[1]);
+		input = string(argv[2]);
+		output = string(argv[3]);
+	}
+	
+	Mat image = imread(input, 0); 
+	if (image.empty()) {
+		return -1;
+	}
+	
+	Mat final;
+	double startTime = CycleTimer::currentSeconds();
+	if (type=="s") {
+		final = runCUDA(image);
+	} else if (type =="p") {
+		return -1;
+	} else {
+		return -1;
+	}
+	double endTime = CycleTimer::currentSeconds();
+	printf("total time: %.3f ms \n", 1000.f * (endTime-startTime));
+	
+	//save and display image
+	//namedWindow("Merged image", WINDOW_AUTOSIZE);
+	//imshow("Merged image", final);
+	imwrite("result.jpg", final);
+}
