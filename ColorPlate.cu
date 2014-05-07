@@ -1,10 +1,17 @@
 #include <stdio.h>
+#include <algorithm>
+#include <vector>
 
+#include <math.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <driver_functions.h>
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 #include "CycleTimer.h"
+using namespace cv; 
 
 void setup(Mat image) {
 
@@ -26,7 +33,7 @@ __global__ void getChannels(
 	}
 	
 	int channel = y / (height / 3);
-	int newy = y - channel* (y/3)
+	int newy = y - channel* (y/3);
 	if (newy < hbor || newy >= height / 3 - hbor) {
 		return;
 	}	else if (channel == 0) {
@@ -60,9 +67,9 @@ Mat runCUDA(Mat image) {
 	int cw = (image.cols * 9 / 10);
 	int hbor = (image.row / 3) / 20;
 	int wbor = image.cols / 20;
-	size_t channelSize = ch * cw * sizeof(unsigned char);
-	size_t originalSize = image.rows * image.cols * sizeof(unsigned char);
-	size_t finalSize = (ch * 9 / 10) * (cw * 9 / 10) * sizeof(unsigned char);
+	int channelSize = ch * cw * sizeof(unsigned char);
+	int originalSize = image.rows * image.cols * sizeof(unsigned char);
+	int finalSize = (ch * 9 / 10) * (cw * 9 / 10) * sizeof(unsigned char);
 	
 	unsigned char* blue, green, red, original, final;
 	cudaMalloc(&blue, channelSize);
@@ -73,34 +80,28 @@ Mat runCUDA(Mat image) {
 	cudaMemcpy(original, image.ptr<unsigned char>(0), originalSize, cudaMemcpyHostToDevice);
 			
 	//Get separate channels
+	double startTime = CycleTimer::currentSeconds();
 	getChannels<<<pixGridDim, pixBlockDim>>>(original, blue, green, red, ch, cw, hbor, wbor);
+	double endTime = CycleTimer::currentSeconds();
+	printf("Sequential trim and separate: %.3f ms \n", 1000.f * (endTime-startTime));
+	
 	
 	//Find offset
 	findOffsetCuda(blue, green, red, ch, cw);
 	//
-	
-	
-	double startTime = CycleTimer::currentSeconds();
-	int wbor = image.cols / 20;
-	int hbor = image.rows / 20;
-	Mat blue = image(Rect(wbor, hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-	Mat green = image(Rect(wbor, image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-	Mat red = image(Rect(wbor, 2 * image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-	double endTime = CycleTimer::currentSeconds();
-	printf("Sequential trim and separate: %.3f ms \n", 1000.f * (endtime-startTime));
-	
+	/*
 	int * offsets = new int[4]();
 	startTime = CycleTimer::currentSeconds();
 	findOffset(blue, green, red, offsets);
 	endTime = CycleTimer::currentSeconds();
-	printf("Sequential findOffset: %.3f ms \n", 1000.f * (endtime-startTime));
+	printf("Sequential findOffset: %.3f ms \n", 1000.f * (endTime-startTime));
 	
 	//shift images by offset
 	startTime = CycleTimer::currentSeconds();
 	shiftImage(-offsets[0], offsets[1], green);
 	shiftImage(-offsets[2], offsets[3], red);
 	endTime = CycleTimer::currentSeconds();
-	printf("Sequential shift: %.3f ms \n", 1000.f * (endtime-startTime));
+	printf("Sequential shift: %.3f ms \n", 1000.f * (endTime-startTime));
 	
 	//merge 
 	Mat final;
@@ -111,7 +112,9 @@ Mat runCUDA(Mat image) {
 	merge(mergevec, final);
 	
 	//final trim
-	int wbor = final.cols /20;
-	int hbor = final.rows / 20;
+	wbor = final.cols /20;
+	hbor = final.rows / 20;
 	return final(Rect(wbor, hbor, final.cols - 2*wbor, final.rows - 2*hbor));
+	*/
+	return image;
 }
