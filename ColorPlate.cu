@@ -70,7 +70,7 @@ __global__ void ssd (
 
 	
 
-__global__ void shift_image(
+__global__ void shiftImage(
 int x, 
 int y, 
 unsigned char* original,
@@ -80,16 +80,9 @@ int height) {
 	int ix = blockIdx.x * blockDim.x + threadIdx.x;
 	int iy = blockIdx.y * blockDim.y + threadIdx.y;
 	int index = ix + iy * (width);
-	if (ix >= width || iy >= height) {
-		return;
-	}
-	
-	//check x bound has not shifted to another row
-	if (ix + x < 0 || ix + x >= width) {
-		return;
-	}
-	//check y bound has not gone out of bounds
-	if (iy + y < 0 || iy + y >= height) {
+	if (ix >= width || iy >= height ||
+		ix + x < 0 || ix +x >= width ||
+		iy + y < 0 || iy + y >= height) {
 		return;
 	}
 	
@@ -135,7 +128,6 @@ void findOffsetCuda(
 		offsets[1] = gmax.y - hbor;
 		offsets[2] = rmax.x - wbor;
 		offsets[3] = rmax.y - hbor; 
-		printf("offsets are %d %d %d %d \n", offsets[0], offsets[1], offsets[2], offsets[3]);
 		return;
 	} else {
 		unsigned char* bresult;
@@ -196,7 +188,7 @@ void findOffsetCuda(
 				}
 			}
 		}
-		printf("offsets are %d %d %d %d \n", offsets[0], offsets[1], offsets[2], offsets[3]);
+
 		cudaFree(bresult);
 		cudaFree(gresult);
 		cudaFree(rresult);
@@ -232,40 +224,39 @@ Mat runCUDA(Mat image) {
 	cudaMemcpy(dgreen, green.data, channelSize, cudaMemcpyHostToDevice);
 	cudaMemcpy(dred, red.data, channelSize, cudaMemcpyHostToDevice);		
 	cudaMemcpy(dkernel, &kernel[0], 9*sizeof(float), cudaMemcpyHostToDevice);
-	findOffsetCuda(dblue, dgreen, dred, dkernel, height, width, offsets);
 	
+	double startTime = CycleTimer::currentSeconds();
+	findOffsetCuda(dblue, dgreen, dred, dkernel, height, width, offsets);
+	double endTime = CycleTimer::currentSeconds();
+	printf("Parallel findOffset: %.3f ms with %d, %d, %d, %d\n", 
+	1000.f * (endTime-startTime), offsets[0], offsets[1], offsets[2], offsets[3]);
 
-	//cudaMemcpy(fred.data, rresult, resultSize, cudaMemcpyDeviceToHost);
-/*
+	dim3 pixBlockDim(32, 16);
+	dim3 pixGridDim((width + pixBlockDim.x -1) / pixBlockDim.x,
+		(height + pixBlockDim.y -1) / pixBlockDim.y);
+	
+	startTime = CycleTimer::currentSeconds();
+	shiftImage<<<pixBlockDim, pixGridDim>>>(-offsets[0], -offsets[1], dgreen, dblue, width, height);
+	cudaMemcpy(green.data, dblue, channelSize, cudaMemcpyDeviceToHost);
+	shiftImage<<<pixBlockDim, pixGridDim>>>(-offsets[2], -offsets[3], dred, dblue, width, height);
+	cudaMemcpy(red.data, dblue, channelSize, cudaMemcpyDeviceToHost);
+	endTime = CycleTimer::currentSeconds();
+	printf("Parallel shift image: %.3f ms with\n", 
+	1000.f * (endTime-startTime));
+	
 	Mat origmerge;  
 	std::vector<Mat> omergevec;
-	omergevec.push_back(fblue);
-	omergevec.push_back(fgreen);
-	omergevec.push_back(fred);
+	omergevec.push_back(blue);
+	omergevec.push_back(green);
+	omergevec.push_back(red);
 	merge(omergevec, origmerge);
-*/
-	/*
-	thrust::device_vector<unsigned char> blueVec(blue.ptr<unsigned char>(0), (--blue.end<unsigned char>()).ptr);
-	thrust::device_vector<unsigned char> greenVec(green.ptr<unsigned char>(0), (--green.end<unsigned char>()).ptr);
-	thrust::device_vector<unsigned char> redVec(red.ptr<unsigned char>(0), (--red.end<unsigned char>()).ptr);
-	
-	//Get separate channels
-	double startTime = CycleTimer::currentSeconds();
-	getChannels<<<pixGridDim, pixBlockDim>>>(original, blue, green, red, ch, cw, hbor, wbor);
-	double endTime = CycleTimer::currentSeconds();
-	printf("Sequential trim and separate: %.3f ms \n", 1000.f * (endTime-startTime));
-	
-	
-	//Find offset
-	findOffsetCuda(blue, green, red, ch, cw);
-	return image;
-	*/
+
 	cudaFree(dblue);
 	cudaFree(dgreen);
 	cudaFree(dred);
 	cudaFree(dkernel);
 	delete [] offsets;
-	return image;
+	return origmerge;
 }
 
 int main(int argc, char** argv) {
@@ -273,10 +264,9 @@ int main(int argc, char** argv) {
 	string output;
 	string type;
  
-	if (argc > 3) {
-	  type = string(argv[1]);
-		input = string(argv[2]);
-		output = string(argv[3]);
+	if (argc > 2) {
+		input = string(argv[1]);
+		output = string(argv[2]);
 	}
 	
 	Mat image = imread(input, 0); 
@@ -286,20 +276,10 @@ int main(int argc, char** argv) {
 	
 	Mat final;
 	double startTime = CycleTimer::currentSeconds();
-	if (type=="s") {
-		final = runCUDA(image);
-		//take_input(image);
-	} else if (type =="p") {
-		return 0;
-	} else {
-		return 0;
-	}
+	final = runCUDA(image);
 	double endTime = CycleTimer::currentSeconds();
 	printf("total time: %.3f ms \n", 1000.f * (endTime-startTime));
 	
-	//save and display image
-	//namedWindow("Merged image", WINDOW_AUTOSIZE);
-	//imshow("Merged image", final);
-	//imwrite("result.jpg", final);
+	imwrite("final.jpg", final);
 	return 0;
 }

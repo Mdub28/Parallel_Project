@@ -136,7 +136,7 @@ Mat runSequential(Mat image) {
 	startTime = CycleTimer::currentSeconds();
 	green = shiftImage(-offsets[0], offsets[1], green);
 	red = shiftImage(-offsets[2], offsets[3], red);
-	endTime = CycleTimer::currentSeconds();
+	endTime = CycleTimer::currentSeconds(); 
 	printf("Sequential shift: %.3f ms \n", 1000.f * (endTime-startTime));
 	
 	//merge 
@@ -157,11 +157,10 @@ int main(int argc, char** argv) {
 	string output;
 	string type;
 
-	if (argc > 3) {
-	  type = string(argv[1]);
-		input = string(argv[2]);
-		output = string(argv[3]);
-	}
+	if (argc > 2) {
+		input = string(argv[1]);
+		output = string(argv[2]);
+	} 
 	
 	Mat image = imread(input, 0); 
 	if (image.empty()) {
@@ -170,18 +169,12 @@ int main(int argc, char** argv) {
 	
 	Mat final;
 	double startTime = CycleTimer::currentSeconds();
-	if (type=="s") {
-		final = runSequential(image);
-	} else if (type =="p") {
-		return -1;
-	} else {
-		return -1;
-	}
+	final = runSequential(image);
 	double endTime = CycleTimer::currentSeconds();
 	printf("total time: %.3f ms \n", 1000.f * (endTime-startTime));
 	
 	//save and display image
 	//namedWindow("Merged image", WINDOW_AUTOSIZE);
 	//imshow("Merged image", final);
-	imwrite("result.jpg", final);
+	imwrite("seqfinal.jpg", final);
 }
