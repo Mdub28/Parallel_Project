@@ -12,8 +12,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <driver_functions.h>
-#include <thrust/host_vector.h>
-
+#include <thrust/device_vector.h>
 #include "CycleTimer.h"
 using namespace cv; 
 using namespace std;
@@ -46,6 +45,64 @@ gaussian_blur(
   }
 }
 
+
+__global__ void ssd (
+	unsigned char * temp,
+	unsigned char * image,
+	float * result,
+	int leftbor,
+	int rightbor,
+	int topbor,
+	int botbor,
+	int width,
+	int xoff,
+	int yoff)  
+{
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	
+	if (x < leftbor || x >= rightbor || y < topbor || y >=botbor) {
+		return; 
+	} else {
+		result[x-leftbor+(y-topbor)*(width/2)] = (fabsf((float)(temp[x+y*width]-image[x+xoff+(y+yoff)*width])));
+	}
+}
+
+	
+
+__global__ void shift_image(
+int x, 
+int y, 
+unsigned char* original,
+unsigned char* result, 
+int width, 
+int height) {
+	int ix = blockIdx.x * blockDim.x + threadIdx.x;
+	int iy = blockIdx.y * blockDim.y + threadIdx.y;
+	int index = ix + iy * (width);
+	if (ix >= width || iy >= height) {
+		return;
+	}
+	
+	//check x bound has not shifted to another row
+	if (ix + x < 0 || ix + x >= width) {
+		return;
+	}
+	//check y bound has not gone out of bounds
+	if (iy + y < 0 || iy + y >= height) {
+		return;
+	}
+	
+	result[ix + x + (iy+y)*width] = original[index];
+}
+
+			
+struct square {
+	__host__ __device__ float operator() (const float& a) const {
+		return pow(a,2);
+	}
+};
+
 void findOffsetCuda(
 	unsigned char * dblue,
 	unsigned char * dgreen,
@@ -53,7 +110,7 @@ void findOffsetCuda(
 	float * dkernel,
 	int height,
 	int width,
-	int * offsets) 
+	int * offsets)  
 {
 	if (height < 200 && width < 200) {
 		Mat blue = Mat::Mat(height, width, CV_8UC1);
@@ -78,15 +135,21 @@ void findOffsetCuda(
 		offsets[1] = gmax.y - hbor;
 		offsets[2] = rmax.x - wbor;
 		offsets[3] = rmax.y - hbor; 
+		printf("offsets are %d %d %d %d \n", offsets[0], offsets[1], offsets[2], offsets[3]);
 		return;
 	} else {
 		unsigned char* bresult;
 		unsigned char* gresult;
 		unsigned char* rresult;
-		size_t resultSize = height/2 * width/2 * sizeof(unsigned char);
+		float * gdif;
+		float * rdif;
+		size_t resultSize = (height/2) * (width/2) * sizeof(unsigned char);
+		size_t ssdSize = (height/2) * (width/2) * sizeof(float);
 		cudaMalloc(&bresult, resultSize);
 		cudaMalloc(&gresult, resultSize);
 		cudaMalloc(&rresult, resultSize);
+		cudaMalloc(&gdif, ssdSize );
+		cudaMalloc(&rdif, ssdSize);
 		
 		dim3 pixBlockDim(32, 16);
 		dim3 pixGridDim((width + pixBlockDim.x -1) / pixBlockDim.x,
@@ -97,39 +160,51 @@ void findOffsetCuda(
 		int * roffsets = new int[4];
 		findOffsetCuda(bresult, gresult, rresult, dkernel, height/2, width/2, roffsets);
 		
-		/*
-		int rlowest = -1;
-		int glowest = -1;	
-		int wbor = blue.cols / 6;
-		int hbor = blue.rows / 6;
-		Mat bluemid = blue(Rect(wbor, hbor, blue.cols - 2*wbor, blue.rows - 2*hbor));
+		float rlowest = -1;
+		float glowest = -1;	
+		int leftbor = width / 4;
+		int rightbor = width - leftbor;
+		int topbor = height/4;
+		int botbor = height - topbor;
+
+		float * bglist = new float[((height/2) *(width/2))];	
+		float * brlist = new float[((height/2) *(width/2))];	
 		for (int i=-2; i <=2; i++) {
-			for (int j=-2; j<=2; j++) {
-				Mat greenmid = green(Rect(wbor+i+2*roffsets[0], hbor+j+2*roffsets[1], blue.cols - 2*wbor, blue.rows - 2*hbor));
-				Mat redmid = red(Rect(wbor+i+2*roffsets[2], hbor+j+2*roffsets[3], blue.cols - 2*wbor, blue.rows - 2*hbor));
-				 
-				subtract(bluemid, redmid, redSub);
-				subtract(bluemid, greenmid, greenSub);
-				pow(redSub, 2, smallR);
-				pow(greenSub, 2, smallG);
+			for (int j=-2; j <=2; j++) {
+				ssd<<<pixGridDim, pixBlockDim>>>(dblue, dgreen, gdif, 
+					leftbor, rightbor, topbor, botbor, width, i+2*roffsets[0], j+2*roffsets[1]);
+				ssd<<<pixGridDim, pixBlockDim>>>(dblue, dred, rdif, 
+					leftbor, rightbor, topbor, botbor, width, i+2*roffsets[2], j+2*roffsets[3]);	
+				cudaMemcpy(&bglist[0], gdif, ssdSize, cudaMemcpyDeviceToHost);
+				cudaMemcpy(&brlist[0], rdif, ssdSize, cudaMemcpyDeviceToHost);
+				thrust::device_vector<float> bgdif(bglist, &bglist[(height/2) * (width/2) ]);
+				thrust::device_vector<float> brdif(brlist, &brlist[(height/2) * (width/2) ]);
+				thrust::transform(bgdif.begin(), bgdif.end(), bgdif.begin(), square());
+				thrust::transform(brdif.begin(), brdif.end(), brdif.begin(), square());
+				float gssd = thrust::reduce(bgdif.begin(), bgdif.end(), (float) 0, thrust::plus<float>());
+				float rssd = thrust::reduce(brdif.begin(), brdif.end(), (float) 0, thrust::plus<float>());	
 				
-				int redSSD = sum(smallR).val[0]; 
-				int greenSSD = sum(smallG).val[0];
-				
-				if (redSSD < rlowest || rlowest == -1) {
+				if (rssd < rlowest || rlowest == -1) {
 					offsets[2] = i+2*roffsets[2];
 					offsets[3] = j+2*roffsets[3];
-					rlowest = redSSD;
+					rlowest = rssd;
 				}
-				
-				if (greenSSD <glowest || glowest == -1) {
+				if (gssd <glowest || glowest == -1) { 
 					offsets[0] = i+2*roffsets[0];
 					offsets[1] = j+2*roffsets[1];
-					glowest = greenSSD;
+					glowest = gssd;
 				}
 			}
 		}
-		*/
+		printf("offsets are %d %d %d %d \n", offsets[0], offsets[1], offsets[2], offsets[3]);
+		cudaFree(bresult);
+		cudaFree(gresult);
+		cudaFree(rresult);
+		cudaFree(gdif);
+		cudaFree(rdif); 
+		delete[] roffsets;
+		delete[] bglist;
+		delete[] brlist;
 	}
 }
 	
@@ -159,27 +234,7 @@ Mat runCUDA(Mat image) {
 	cudaMemcpy(dkernel, &kernel[0], 9*sizeof(float), cudaMemcpyHostToDevice);
 	findOffsetCuda(dblue, dgreen, dred, dkernel, height, width, offsets);
 	
-	unsigned char* bresult;
-	unsigned char* gresult;
-	unsigned char* rresult;
-	Mat fblue = Mat::Mat(height/2, width/2, CV_8UC1);
-	Mat fgreen = Mat::Mat(height/2, width/2, CV_8UC1);
-	Mat fred = Mat::Mat(height/2, width/2, CV_8UC1);
-	size_t resultSize = fblue.rows * fblue.step;
-	cudaMalloc(&bresult, resultSize);
-	cudaMalloc(&gresult, resultSize);
-	cudaMalloc(&rresult, resultSize);
-	
-	dim3 pixBlockDim(32, 16);  
-	dim3 pixGridDim((width + pixBlockDim.x -1) / pixBlockDim.x,
-		(height + pixBlockDim.y -1) / pixBlockDim.y);
-	imwrite("beforeblue.jpg", blue);	
-	gaussian_blur<<<pixBlockDim, pixGridDim >>>(dblue, bresult, width, height, dkernel );
-	gaussian_blur<<< pixGridDim,pixBlockDim>>>(dgreen, gresult, width, height, dkernel );
-	gaussian_blur<<<pixGridDim,pixBlockDim>>>(dred, rresult, width, height, dkernel); 
- 
-	cudaMemcpy(fblue.data, bresult, resultSize, cudaMemcpyDeviceToHost); 
-	//cudaMemcpy(fgreen.data, dgreen, resultSize, cudaMemcpyDeviceToHost);
+
 	//cudaMemcpy(fred.data, rresult, resultSize, cudaMemcpyDeviceToHost);
 /*
 	Mat origmerge;  
@@ -189,10 +244,7 @@ Mat runCUDA(Mat image) {
 	omergevec.push_back(fred);
 	merge(omergevec, origmerge);
 */
-	imwrite("afterblue.jpg", fblue);
-	
-	
-				/*
+	/*
 	thrust::device_vector<unsigned char> blueVec(blue.ptr<unsigned char>(0), (--blue.end<unsigned char>()).ptr);
 	thrust::device_vector<unsigned char> greenVec(green.ptr<unsigned char>(0), (--green.end<unsigned char>()).ptr);
 	thrust::device_vector<unsigned char> redVec(red.ptr<unsigned char>(0), (--red.end<unsigned char>()).ptr);
@@ -211,45 +263,11 @@ Mat runCUDA(Mat image) {
 	cudaFree(dblue);
 	cudaFree(dgreen);
 	cudaFree(dred);
-	//cudaFree(bresult);
-	//cudaFree(gresult);
-	//cudaFree(rresult);
+	cudaFree(dkernel);
+	delete [] offsets;
 	return image;
 }
 
-void take_input(Mat image)
-{
-		int wbor = image.cols / 20;
-		int hbor = image.rows / 20;
-		Mat input = image(Rect(wbor, hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-		Mat output = image(Rect(wbor, image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-		imwrite("bluestart.jpg", input);
-		imwrite("greenstart.jpg", output);
-    unsigned char *device_input;
-    unsigned char *device_output;
-
-    size_t d_ipimgSize = input.step * input.rows;
-    size_t d_opimgSize = output.step * output.rows;
-
-    cudaMalloc( (void**) &device_input, d_ipimgSize);
-    cudaMalloc( (void**) &device_output, d_opimgSize);
-
-    cudaMemcpy(device_input, input.data, d_ipimgSize, cudaMemcpyHostToDevice);
-
-    dim3 Threads(32, 16);  // 512 threads per block
-    dim3 Blocks((input.cols + Threads.x - 1)/Threads.x, (input.rows + Threads.y - 1)/Threads.y);
-
-    //int check = (input.cols + Threads.x - 1)/Threads.x;
-    //printf( "blockx %d", check);
-
-    cudaMemcpy(output.data, device_input, d_opimgSize, cudaMemcpyDeviceToHost);
-		imwrite("greenend.jpg", output);
-    //printf( "num_rows_cuda %d", num_rows);
-    //printf("\n");
-
-    cudaFree(device_input);
-    cudaFree(device_output);
-}
 int main(int argc, char** argv) {
 	string input; 
 	string output;
