@@ -18,29 +18,32 @@
 using namespace cv; 
 using namespace std;
 
-__global__ void gaussian_blur(
-	unsigned char * original,
-	unsigned char * result,
+__global__ void 
+gaussian_blur(
+	unsigned char *  original,
+	unsigned char *  result,
 	int width,
 	int height,
-	float * kernel) 
+	float *  kernel) 
 {
-	int y	= blockIdx.y * blockDim.y + threadIdx.y;		// current row
-	int x	= blockIdx.x * blockDim.x + threadIdx.x;		// current column
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
 	
-	if(y%2 == 0 || x%2 == 0|| y == 0 || y >= height -1 || x==0 || x>=width-1) {
+	if( x%2 == 0 || y %2==0 ||y <= 0 || y >= height -1 || x<=0 || x>=width-1) {
 		return;
 	} else {
-		float total= 0;
-		for(int i=-1; i <= 1; i++) {
-			for(int j=-1; j<=1; j++) {
-				int index = x + i + width * (y + j);
-				float pixel = static_cast<float>(original[index]);
-				total += pixel * kernel[i+1 + (j+1)*3];
-			}
-		}
-		result[(x / 2) + (y/2)*(width/2)] = static_cast<unsigned char>(total);
-	}
+		float total= 0.f;
+		total += 1.f / 16 *static_cast<float>(original[x + -1 + width * (y + -1)]);
+		total += 2.f / 16 *static_cast<float>(original[x + -1 + width * (y + 0)]);
+		total += 1.f / 16 *static_cast<float>(original[x + -1 + width * (y + 1)]);
+		total += 2.f / 16 *static_cast<float>(original[x + 0 + width * (y + -1)]);
+		total += 4.f/16 *static_cast<float>(original[x + 0 + width * (y + 0)]);
+		total += 2.f / 16 *static_cast<float>(original[x + 0 + width * (y + 1)]);
+		total += 1.f / 16 *static_cast<float>(original[x + 1 + width * (y + -1)]);
+		total += 2.f / 16 *static_cast<float>(original[x + 1 + width * (y + 0)]);
+		total += 1.f / 16 *static_cast<float>(original[x + 1 + width * (y + 1)]);
+		result[(x/2) + (y/2)*(width/2)] = static_cast<unsigned char>(total); 
+  }
 }
 
 void findOffsetCuda(
@@ -56,9 +59,9 @@ void findOffsetCuda(
 		Mat blue = Mat::Mat(height, width, CV_8UC1);
 		Mat green = Mat::Mat(height, width, CV_8UC1);
 		Mat red = Mat::Mat(height, width, CV_8UC1);
-		cudaMemcpy(blue.ptr<unsigned char>(0), dblue, height*width*sizeof(unsigned char), cudaMemcpyDeviceToHost);
-		cudaMemcpy(green.ptr<unsigned char>(0), dgreen, height*width*sizeof(unsigned char), cudaMemcpyDeviceToHost);
-		cudaMemcpy(red.ptr<unsigned char>(0), dred, height*width*sizeof(unsigned char), cudaMemcpyDeviceToHost);
+		cudaMemcpy(blue.data, dblue, height*blue.step, cudaMemcpyDeviceToHost);
+		cudaMemcpy(green.data, dgreen, height*green.step, cudaMemcpyDeviceToHost);
+		cudaMemcpy(red.data, dred, height*red.step, cudaMemcpyDeviceToHost);
 		int wbor = width / 10;
 		int hbor = height / 10;
 		Mat filter = blue(Rect(wbor, hbor, blue.cols - 2*wbor, blue.rows - 2*hbor));
@@ -80,18 +83,17 @@ void findOffsetCuda(
 		unsigned char* bresult;
 		unsigned char* gresult;
 		unsigned char* rresult;
-		int resultSize = height /2 * width /2 * sizeof(unsigned char);
+		size_t resultSize = height/2 * width/2 * sizeof(unsigned char);
 		cudaMalloc(&bresult, resultSize);
 		cudaMalloc(&gresult, resultSize);
 		cudaMalloc(&rresult, resultSize);
 		
-		dim3 pixBlockDim(32, 32);
+		dim3 pixBlockDim(32, 16);
 		dim3 pixGridDim((width + pixBlockDim.x -1) / pixBlockDim.x,
 			(height + pixBlockDim.y -1) / pixBlockDim.y);
 		gaussian_blur<<<pixGridDim, pixBlockDim>>>(dblue, bresult, width, height, dkernel );
 		gaussian_blur<<<pixGridDim, pixBlockDim>>>(dgreen, gresult, width, height, dkernel );
 		gaussian_blur<<<pixGridDim, pixBlockDim>>>(dred, rresult, width, height, dkernel);
-		
 		int * roffsets = new int[4];
 		findOffsetCuda(bresult, gresult, rresult, dkernel, height/2, width/2, roffsets);
 		
@@ -134,61 +136,61 @@ void findOffsetCuda(
 Mat runCUDA(Mat image) {
 	int wbor = image.cols / 20;
 	int hbor = image.rows / 20;
-	Mat blue = image(Rect(wbor, hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-	Mat green = image(Rect(wbor, image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-	Mat red = image(Rect(wbor, 2 * image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
-	float kernel[9] = { 1.f / 16 ,2.f / 16,1.f/16 ,2.f/16,4.f/16,2.f/16,1.f/16,2.f/16,1.f/16};
-	for (int i=0; i < 9; i++) {
-		printf("%f \n", kernel[i]);
-	}
-	int channelSize = blue.cols*blue.rows*sizeof(unsigned char);
+	Mat blue = image(Rect(wbor, hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor)).clone();
+	Mat green = image(Rect(wbor, image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor)).clone();
+	Mat red = image(Rect(wbor, 2 * image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor)).clone();
+	
+	int height = blue.rows;
+	int width = blue.cols;
+	size_t channelSize = height*blue.step; 
 	unsigned char* dblue;
 	unsigned char* dred;
   unsigned char* dgreen;
 	float * dkernel;
+	float kernel[9] = { 1.f / 16 ,2.f / 16,1.f/16 ,2.f/16,4.f/16,2.f/16,1.f/16,2.f/16,1.f/16};
 	int * offsets = new int[4];
-	cudaMalloc(&dblue, channelSize);
-	cudaMalloc(&dgreen, channelSize);
-	cudaMalloc(&dred, channelSize);
+	cudaMalloc( &dblue, channelSize);
+	cudaMalloc( &dgreen, channelSize);
+	cudaMalloc( &dred, channelSize);
 	cudaMalloc(&dkernel, 9*sizeof(float));
-	cudaMemcpy(dblue, blue.ptr<unsigned char>(0), channelSize, cudaMemcpyHostToDevice);
-	cudaMemcpy(dgreen, green.ptr<unsigned char>(0), channelSize, cudaMemcpyHostToDevice);
-	cudaMemcpy(dred, red.ptr<unsigned char>(0), channelSize, cudaMemcpyHostToDevice);		
+	cudaMemcpy(dblue, blue.data, channelSize, cudaMemcpyHostToDevice);
+	cudaMemcpy(dgreen, green.data, channelSize, cudaMemcpyHostToDevice);
+	cudaMemcpy(dred, red.data, channelSize, cudaMemcpyHostToDevice);		
 	cudaMemcpy(dkernel, &kernel[0], 9*sizeof(float), cudaMemcpyHostToDevice);
-	//findOffsetCuda(dblue, dgreen, dred, dkernel, blue.cols, blue.rows, offsets);
+	findOffsetCuda(dblue, dgreen, dred, dkernel, height, width, offsets);
 	
 	unsigned char* bresult;
 	unsigned char* gresult;
 	unsigned char* rresult;
-	int height = blue.rows;
-	int width = blue.cols;
-	int resultSize = height /2 * width /2 * sizeof(unsigned char);
+	Mat fblue = Mat::Mat(height/2, width/2, CV_8UC1);
+	Mat fgreen = Mat::Mat(height/2, width/2, CV_8UC1);
+	Mat fred = Mat::Mat(height/2, width/2, CV_8UC1);
+	size_t resultSize = fblue.rows * fblue.step;
 	cudaMalloc(&bresult, resultSize);
 	cudaMalloc(&gresult, resultSize);
 	cudaMalloc(&rresult, resultSize);
 	
-	dim3 pixBlockDim(32, 32);
+	dim3 pixBlockDim(32, 16);  
 	dim3 pixGridDim((width + pixBlockDim.x -1) / pixBlockDim.x,
 		(height + pixBlockDim.y -1) / pixBlockDim.y);
-	gaussian_blur<<<pixGridDim, pixBlockDim>>>(dblue, bresult, width, height, dkernel );
-	gaussian_blur<<<pixGridDim, pixBlockDim>>>(dgreen, gresult, width, height, dkernel );
-	gaussian_blur<<<pixGridDim, pixBlockDim>>>(dred, rresult, width, height, dkernel);
-	
-	Mat fblue = Mat::Mat(height/2, width/2, CV_8UC1);
-	Mat fgreen = Mat::Mat(height/2, width/2, CV_8UC1);
-	Mat fred = Mat::Mat(height/2, width/2, CV_8UC1);
-	cudaMemcpy(fblue.ptr<unsigned char>(0), bresult, (height/2)*(width/2)*sizeof(unsigned char), cudaMemcpyDeviceToHost);
-	cudaMemcpy(fgreen.ptr<unsigned char>(0), gresult, (height/2)*(width/2)*sizeof(unsigned char), cudaMemcpyDeviceToHost);
-	cudaMemcpy(fred.ptr<unsigned char>(0), rresult, (height/2)*(width/2)*sizeof(unsigned char), cudaMemcpyDeviceToHost);
-	/*
-	Mat origmerge; 
+	imwrite("beforeblue.jpg", blue);	
+	gaussian_blur<<<pixBlockDim, pixGridDim >>>(dblue, bresult, width, height, dkernel );
+	gaussian_blur<<< pixGridDim,pixBlockDim>>>(dgreen, gresult, width, height, dkernel );
+	gaussian_blur<<<pixGridDim,pixBlockDim>>>(dred, rresult, width, height, dkernel); 
+ 
+	cudaMemcpy(fblue.data, bresult, resultSize, cudaMemcpyDeviceToHost); 
+	//cudaMemcpy(fgreen.data, dgreen, resultSize, cudaMemcpyDeviceToHost);
+	//cudaMemcpy(fred.data, rresult, resultSize, cudaMemcpyDeviceToHost);
+/*
+	Mat origmerge;  
 	std::vector<Mat> omergevec;
 	omergevec.push_back(fblue);
 	omergevec.push_back(fgreen);
 	omergevec.push_back(fred);
 	merge(omergevec, origmerge);
-	*/
-	imwrite("gaussed1.jpg", fblue);
+*/
+	imwrite("afterblue.jpg", fblue);
+	
 	
 				/*
 	thrust::device_vector<unsigned char> blueVec(blue.ptr<unsigned char>(0), (--blue.end<unsigned char>()).ptr);
@@ -206,9 +208,48 @@ Mat runCUDA(Mat image) {
 	findOffsetCuda(blue, green, red, ch, cw);
 	return image;
 	*/
+	cudaFree(dblue);
+	cudaFree(dgreen);
+	cudaFree(dred);
+	//cudaFree(bresult);
+	//cudaFree(gresult);
+	//cudaFree(rresult);
 	return image;
 }
 
+void take_input(Mat image)
+{
+		int wbor = image.cols / 20;
+		int hbor = image.rows / 20;
+		Mat input = image(Rect(wbor, hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
+		Mat output = image(Rect(wbor, image.rows/3 + hbor, image.cols - 2*wbor, image.rows/3 - 2*hbor));
+		imwrite("bluestart.jpg", input);
+		imwrite("greenstart.jpg", output);
+    unsigned char *device_input;
+    unsigned char *device_output;
+
+    size_t d_ipimgSize = input.step * input.rows;
+    size_t d_opimgSize = output.step * output.rows;
+
+    cudaMalloc( (void**) &device_input, d_ipimgSize);
+    cudaMalloc( (void**) &device_output, d_opimgSize);
+
+    cudaMemcpy(device_input, input.data, d_ipimgSize, cudaMemcpyHostToDevice);
+
+    dim3 Threads(32, 16);  // 512 threads per block
+    dim3 Blocks((input.cols + Threads.x - 1)/Threads.x, (input.rows + Threads.y - 1)/Threads.y);
+
+    //int check = (input.cols + Threads.x - 1)/Threads.x;
+    //printf( "blockx %d", check);
+
+    cudaMemcpy(output.data, device_input, d_opimgSize, cudaMemcpyDeviceToHost);
+		imwrite("greenend.jpg", output);
+    //printf( "num_rows_cuda %d", num_rows);
+    //printf("\n");
+
+    cudaFree(device_input);
+    cudaFree(device_output);
+}
 int main(int argc, char** argv) {
 	string input; 
 	string output;
@@ -222,17 +263,18 @@ int main(int argc, char** argv) {
 	
 	Mat image = imread(input, 0); 
 	if (image.empty()) {
-		return -1;
+		return 0;
 	}
 	
 	Mat final;
 	double startTime = CycleTimer::currentSeconds();
 	if (type=="s") {
 		final = runCUDA(image);
+		//take_input(image);
 	} else if (type =="p") {
-		return -1;
+		return 0;
 	} else {
-		return -1;
+		return 0;
 	}
 	double endTime = CycleTimer::currentSeconds();
 	printf("total time: %.3f ms \n", 1000.f * (endTime-startTime));
@@ -241,4 +283,5 @@ int main(int argc, char** argv) {
 	//namedWindow("Merged image", WINDOW_AUTOSIZE);
 	//imshow("Merged image", final);
 	//imwrite("result.jpg", final);
+	return 0;
 }
